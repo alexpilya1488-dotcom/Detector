@@ -14,11 +14,13 @@
   select{flex:1;font-size:16px;padding:8px;border-radius:8px;border:0;background:#333;color:#fff}
   #t1,#t2{font-size:28px;font-weight:700;margin-top:10px;min-height:34px}
   #t2{color:#ffd54f}
+  #mark{position:fixed;border:3px solid #ffd54f;border-radius:50%;pointer-events:none;opacity:0;transform:translate(-50%,-50%);transition:opacity .4s}
   #status{font-size:13px;opacity:.7;margin-top:8px}
 </style>
 </head>
 <body>
 <video id="v" playsinline autoplay muted></video>
+<div id="mark"></div>
 <div id="panel">
   <div class="row"><select id="l1"></select><select id="l2"></select></div>
   <div id="t1" dir="auto">…</div>
@@ -85,19 +87,45 @@ async function main() {
     return;
   }
   const model = await mobilenet.load({ version: 2, alpha: 1.0 });
-  statusEl.textContent = "Наведите камеру на предмет";
+  statusEl.textContent = "Нажмите на предмет на экране";
 
-  async function loop() {
-    if (video.readyState >= 2) {
-      const res = await model.classify(video, 1);
-      if (res.length && res[0].probability > 0.4) {
-        const label = res[0].className.split(",")[0].trim().toLowerCase();
-        if (label !== current) { current = label; show(); }
-      }
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 224;
+  const ctx = canvas.getContext("2d");
+  const mark = $("mark");
+  let busy = false;
+
+  video.addEventListener("click", async (e) => {
+    if (busy || !video.videoWidth) return;
+    busy = true;
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const cw = window.innerWidth, ch = window.innerHeight;
+    // экран показывает видео с object-fit: cover — пересчитываем точку нажатия
+    const scale = Math.max(cw / vw, ch / vh);
+    const offX = (vw * scale - cw) / 2, offY = (vh * scale - ch) / 2;
+    const vx = (e.clientX + offX) / scale, vy = (e.clientY + offY) / scale;
+    const size = Math.min(vw, vh) * 0.4;
+    const sx = Math.max(0, Math.min(vw - size, vx - size / 2));
+    const sy = Math.max(0, Math.min(vh - size, vy - size / 2));
+    ctx.drawImage(video, sx, sy, size, size, 0, 0, 224, 224);
+
+    // рамка на месте нажатия
+    const px = size * scale;
+    Object.assign(mark.style, { left: e.clientX + "px", top: e.clientY + "px",
+      width: px + "px", height: px + "px", opacity: 1 });
+    setTimeout(() => mark.style.opacity = 0, 700);
+
+    statusEl.textContent = "Распознаю…";
+    const res = await model.classify(canvas, 1);
+    if (res.length && res[0].probability > 0.15) {
+      current = res[0].className.split(",")[0].trim().toLowerCase();
+      statusEl.textContent = "Нажмите на другой предмет";
+      show();
+    } else {
+      statusEl.textContent = "Не удалось распознать, нажмите ещё раз ближе к предмету";
     }
-    setTimeout(loop, 700);
-  }
-  loop();
+    busy = false;
+  });
 }
 main();
 </script>
