@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>ObjectLens</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;font-family:system-ui,sans-serif;overflow:hidden}
+  video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
+  #panel{position:fixed;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);color:#fff;
+    padding:14px 16px calc(14px + env(safe-area-inset-bottom));}
+  .row{display:flex;gap:8px}
+  select{flex:1;font-size:16px;padding:8px;border-radius:8px;border:0;background:#333;color:#fff}
+  #t1,#t2{font-size:28px;font-weight:700;margin-top:10px;min-height:34px}
+  #t2{color:#ffd54f}
+  #status{font-size:13px;opacity:.7;margin-top:8px}
+</style>
+</head>
+<body>
+<video id="v" playsinline autoplay muted></video>
+<div id="panel">
+  <div class="row"><select id="l1"></select><select id="l2"></select></div>
+  <div id="t1" dir="auto">…</div>
+  <div id="t2" dir="auto">…</div>
+  <div id="status">Загрузка модели…</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1"></script>
+<script>
+const LANGS = [
+  ["Русский","ru"],["English","en"],["Español","es"],["Deutsch","de"],["Français","fr"],
+  ["Italiano","it"],["Português","pt"],["Türkçe","tr"],["Українська","uk"],
+  ["中文","zh-CN"],["日本語","ja"],["한국어","ko"],["العربية","ar"]
+];
+const $ = id => document.getElementById(id);
+const l1 = $("l1"), l2 = $("l2"), t1 = $("t1"), t2 = $("t2"), statusEl = $("status"), video = $("v");
+
+for (const sel of [l1, l2]) LANGS.forEach(([n, c]) => sel.add(new Option(n, c)));
+l1.value = localStorage.getItem("l1") || "ru";
+l2.value = localStorage.getItem("l2") || "en";
+
+let current = null;
+const cache = new Map();
+
+async function translate(text, lang) {
+  if (lang === "en") return text;
+  const key = lang + "|" + text;
+  if (cache.has(key)) return cache.get(key);
+  try {
+    const r = await fetch("https://api.mymemory.translated.net/get?q=" +
+      encodeURIComponent(text) + "&langpair=en|" + lang);
+    const j = await r.json();
+    const out = j.responseData.translatedText || text;
+    cache.set(key, out);
+    return out;
+  } catch (e) { return text; }
+}
+
+async function show() {
+  if (!current) return;
+  const label = current;
+  const [a, b] = await Promise.all([translate(label, l1.value), translate(label, l2.value)]);
+  if (label !== current) return; // предмет уже сменился
+  t1.textContent = a;
+  t2.textContent = b;
+}
+
+for (const sel of [l1, l2]) sel.onchange = () => {
+  localStorage.setItem("l1", l1.value);
+  localStorage.setItem("l2", l2.value);
+  show();
+};
+
+async function main() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: "environment" } }, audio: false
+    });
+    video.srcObject = stream;
+    await video.play();
+  } catch (e) {
+    statusEl.textContent = "Нет доступа к камере (нужен https и разрешение)";
+    return;
+  }
+  const model = await mobilenet.load({ version: 2, alpha: 1.0 });
+  statusEl.textContent = "Наведите камеру на предмет";
+
+  async function loop() {
+    if (video.readyState >= 2) {
+      const res = await model.classify(video, 1);
+      if (res.length && res[0].probability > 0.4) {
+        const label = res[0].className.split(",")[0].trim().toLowerCase();
+        if (label !== current) { current = label; show(); }
+      }
+    }
+    setTimeout(loop, 700);
+  }
+  loop();
+}
+main();
+</script>
+</body>
+</html>
