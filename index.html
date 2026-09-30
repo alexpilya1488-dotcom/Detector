@@ -7,73 +7,165 @@
 <title>ObjectLens</title>
 <style>
   html,body{margin:0;height:100%;background:#000;font-family:system-ui,sans-serif;overflow:hidden}
-  video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
+  video,#ov{position:fixed;inset:0;width:100%;height:100%}
+  video{object-fit:cover}
+  #ov{pointer-events:none}
   #panel{position:fixed;left:0;right:0;bottom:0;background:rgba(0,0,0,.78);color:#fff;
-    padding:14px 16px calc(14px + env(safe-area-inset-bottom));}
+    padding:12px 16px calc(12px + env(safe-area-inset-bottom))}
   .row{display:flex;gap:8px}
   select{flex:1;font-size:16px;padding:8px;border-radius:8px;border:0;background:#333;color:#fff}
-  #t1,#t2{font-size:28px;font-weight:700;margin-top:10px;min-height:34px}
-  #t2{color:#ffd54f}
-  #mark{position:fixed;border:3px solid #ffd54f;border-radius:50%;pointer-events:none;opacity:0;transform:translate(-50%,-50%);transition:opacity .4s}
   #status{font-size:13px;opacity:.7;margin-top:8px}
 </style>
 </head>
 <body>
 <video id="v" playsinline autoplay muted></video>
-<div id="mark"></div>
+<canvas id="ov"></canvas>
 <div id="panel">
   <div class="row"><select id="l1"></select><select id="l2"></select></div>
-  <div id="t1" dir="auto">…</div>
-  <div id="t2" dir="auto">…</div>
   <div id="status">Загрузка модели…</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0"></script>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet@2.1.1"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3"></script>
 <script>
 const LANGS = [
   ["Русский","ru"],["English","en"],["Español","es"],["Deutsch","de"],["Français","fr"],
   ["Italiano","it"],["Português","pt"],["Türkçe","tr"],["Українська","uk"],
   ["中文","zh-CN"],["日本語","ja"],["한국어","ko"],["العربية","ar"]
 ];
-const $ = id => document.getElementById(id);
-const l1 = $("l1"), l2 = $("l2"), t1 = $("t1"), t2 = $("t2"), statusEl = $("status"), video = $("v");
+// Готовый словарь: английское название | ru es de fr it pt tr uk zh ja ko ar
+const ORDER = ["ru","es","de","fr","it","pt","tr","uk","zh-CN","ja","ko","ar"];
+const DICT_SRC = `
+person|человек|persona|Person|personne|persona|pessoa|kişi|людина|人|人|사람|شخص
+bicycle|велосипед|bicicleta|Fahrrad|vélo|bicicletta|bicicleta|bisiklet|велосипед|自行车|自転車|자전거|دراجة
+car|машина|coche|Auto|voiture|auto|carro|araba|автомобіль|汽车|車|자동차|سيارة
+motorcycle|мотоцикл|moto|Motorrad|moto|moto|moto|motosiklet|мотоцикл|摩托车|バイク|오토바이|دراجة نارية
+airplane|самолёт|avión|Flugzeug|avion|aereo|avião|uçak|літак|飞机|飛行機|비행기|طائرة
+bus|автобус|autobús|Bus|bus|autobus|ônibus|otobüs|автобус|公交车|バス|버스|حافلة
+train|поезд|tren|Zug|train|treno|trem|tren|поїзд|火车|電車|기차|قطار
+truck|грузовик|camión|Lastwagen|camion|camion|caminhão|kamyon|вантажівка|卡车|トラック|트럭|شاحنة
+boat|лодка|barco|Boot|bateau|barca|barco|tekne|човен|船|ボート|배|قارب
+traffic light|светофор|semáforo|Ampel|feu tricolore|semaforo|semáforo|trafik ışığı|світлофор|红绿灯|信号機|신호등|إشارة مرور
+bench|скамейка|banco|Bank|banc|panchina|banco|bank|лавка|长椅|ベンチ|벤치|مقعد
+bird|птица|pájaro|Vogel|oiseau|uccello|pássaro|kuş|птах|鸟|鳥|새|طائر
+cat|кошка|gato|Katze|chat|gatto|gato|kedi|кішка|猫|猫|고양이|قطة
+dog|собака|perro|Hund|chien|cane|cachorro|köpek|собака|狗|犬|개|كلب
+horse|лошадь|caballo|Pferd|cheval|cavallo|cavalo|at|кінь|马|馬|말|حصان
+sheep|овца|oveja|Schaf|mouton|pecora|ovelha|koyun|вівця|羊|羊|양|خروف
+cow|корова|vaca|Kuh|vache|mucca|vaca|inek|корова|牛|牛|소|بقرة
+elephant|слон|elefante|Elefant|éléphant|elefante|elefante|fil|слон|大象|象|코끼리|فيل
+bear|медведь|oso|Bär|ours|orso|urso|ayı|ведмідь|熊|クマ|곰|دب
+backpack|рюкзак|mochila|Rucksack|sac à dos|zaino|mochila|sırt çantası|рюкзак|背包|リュック|배낭|حقيبة ظهر
+umbrella|зонт|paraguas|Regenschirm|parapluie|ombrello|guarda-chuva|şemsiye|парасолька|雨伞|傘|우산|مظلة
+handbag|сумка|bolso|Handtasche|sac à main|borsa|bolsa|çanta|сумка|手提包|ハンドバッグ|핸드백|حقيبة يد
+tie|галстук|corbata|Krawatte|cravate|cravatta|gravata|kravat|краватка|领带|ネクタイ|넥타이|ربطة عنق
+suitcase|чемодан|maleta|Koffer|valise|valigia|mala|bavul|валіза|行李箱|スーツケース|여행가방|حقيبة سفر
+bottle|бутылка|botella|Flasche|bouteille|bottiglia|garrafa|şişe|пляшка|瓶子|ボトル|병|زجاجة
+wine glass|бокал|copa|Weinglas|verre à vin|calice|taça|şarap kadehi|келих|酒杯|ワイングラス|와인잔|كأس نبيذ
+cup|чашка|taza|Tasse|tasse|tazza|xícara|fincan|чашка|杯子|カップ|컵|فنجان
+fork|вилка|tenedor|Gabel|fourchette|forchetta|garfo|çatal|виделка|叉子|フォーク|포크|شوكة
+knife|нож|cuchillo|Messer|couteau|coltello|faca|bıçak|ніж|刀|ナイフ|칼|سكين
+spoon|ложка|cuchara|Löffel|cuillère|cucchiaio|colher|kaşık|ложка|勺子|スプーン|숟가락|ملعقة
+bowl|миска|cuenco|Schüssel|bol|ciotola|tigela|kase|миска|碗|ボウル|그릇|وعاء
+banana|банан|plátano|Banane|banane|banana|banana|muz|банан|香蕉|バナナ|바나나|موز
+apple|яблоко|manzana|Apfel|pomme|mela|maçã|elma|яблуко|苹果|りんご|사과|تفاحة
+sandwich|сэндвич|sándwich|Sandwich|sandwich|panino|sanduíche|sandviç|сендвіч|三明治|サンドイッチ|샌드위치|ساندويتش
+orange|апельсин|naranja|Orange|orange|arancia|laranja|portakal|апельсин|橙子|オレンジ|오렌지|برتقالة
+broccoli|брокколи|brócoli|Brokkoli|brocoli|broccoli|brócolis|brokoli|броколі|西兰花|ブロッコリー|브로콜리|بروكلي
+carrot|морковь|zanahoria|Karotte|carotte|carota|cenoura|havuç|морква|胡萝卜|にんじん|당근|جزرة
+hot dog|хот-дог|perrito caliente|Hotdog|hot-dog|hot dog|cachorro-quente|sosisli|хот-дог|热狗|ホットドッグ|핫도그|هوت دوغ
+pizza|пицца|pizza|Pizza|pizza|pizza|pizza|pizza|піца|披萨|ピザ|피자|بيتزا
+donut|пончик|dónut|Donut|beignet|ciambella|rosquinha|donut|пончик|甜甜圈|ドーナツ|도넛|دونات
+cake|торт|pastel|Kuchen|gâteau|torta|bolo|pasta|торт|蛋糕|ケーキ|케이크|كعكة
+chair|стул|silla|Stuhl|chaise|sedia|cadeira|sandalye|стілець|椅子|椅子|의자|كرسي
+couch|диван|sofá|Sofa|canapé|divano|sofá|kanepe|диван|沙发|ソファ|소파|أريكة
+potted plant|комнатное растение|planta en maceta|Topfpflanze|plante en pot|pianta in vaso|planta em vaso|saksı bitkisi|кімнатна рослина|盆栽|鉢植え|화분|نبتة في أصيص
+bed|кровать|cama|Bett|lit|letto|cama|yatak|ліжко|床|ベッド|침대|سرير
+dining table|обеденный стол|mesa de comedor|Esstisch|table à manger|tavolo da pranzo|mesa de jantar|yemek masası|обідній стіл|餐桌|ダイニングテーブル|식탁|طاولة طعام
+toilet|унитаз|inodoro|Toilette|toilettes|water|vaso sanitário|klozet|унітаз|马桶|トイレ|변기|مرحاض
+tv|телевизор|televisor|Fernseher|télévision|televisore|televisão|televizyon|телевізор|电视|テレビ|텔레비전|تلفزيون
+laptop|ноутбук|portátil|Laptop|ordinateur portable|portatile|notebook|dizüstü bilgisayar|ноутбук|笔记本电脑|ノートパソコン|노트북|حاسوب محمول
+mouse|компьютерная мышь|ratón|Maus|souris|mouse|mouse|fare|комп'ютерна миша|鼠标|マウス|마우스|فأرة
+remote|пульт|mando a distancia|Fernbedienung|télécommande|telecomando|controle remoto|kumanda|пульт|遥控器|リモコン|리모컨|جهاز تحكم
+keyboard|клавиатура|teclado|Tastatur|clavier|tastiera|teclado|klavye|клавіатура|键盘|キーボード|키보드|لوحة مفاتيح
+cell phone|телефон|teléfono móvil|Handy|téléphone portable|cellulare|celular|cep telefonu|телефон|手机|携帯電話|휴대폰|هاتف محمول
+microwave|микроволновка|microondas|Mikrowelle|micro-ondes|microonde|micro-ondas|mikrodalga|мікрохвильовка|微波炉|電子レンジ|전자레인지|ميكروويف
+oven|духовка|horno|Backofen|four|forno|forno|fırın|духовка|烤箱|オーブン|오븐|فرن
+toaster|тостер|tostadora|Toaster|grille-pain|tostapane|torradeira|ekmek kızartma makinesi|тостер|烤面包机|トースター|토스터|محمصة
+sink|раковина|lavabo|Waschbecken|évier|lavandino|pia|lavabo|раковина|水槽|流し台|싱크대|حوض
+refrigerator|холодильник|nevera|Kühlschrank|réfrigérateur|frigorifero|geladeira|buzdolabı|холодильник|冰箱|冷蔵庫|냉장고|ثلاجة
+book|книга|libro|Buch|livre|libro|livro|kitap|книга|书|本|책|كتاب
+clock|часы|reloj|Uhr|horloge|orologio|relógio|saat|годинник|时钟|時計|시계|ساعة
+vase|ваза|jarrón|Vase|vase|vaso|vaso|vazo|ваза|花瓶|花瓶|꽃병|مزهرية
+scissors|ножницы|tijeras|Schere|ciseaux|forbici|tesoura|makas|ножиці|剪刀|はさみ|가위|مقص
+teddy bear|плюшевый мишка|osito de peluche|Teddybär|ours en peluche|orsacchiotto|urso de pelúcia|oyuncak ayı|плюшевий ведмедик|泰迪熊|テディベア|테디베어|دمية دب
+`;
+const DICT = {};
+DICT_SRC.trim().split("\n").forEach(line => {
+  const p = line.split("|");
+  DICT[p[0]] = Object.fromEntries(ORDER.map((c, i) => [c, p[i + 1]]));
+});
 
+const $ = id => document.getElementById(id);
+const l1 = $("l1"), l2 = $("l2"), statusEl = $("status"), video = $("v");
 for (const sel of [l1, l2]) LANGS.forEach(([n, c]) => sel.add(new Option(n, c)));
 l1.value = localStorage.getItem("l1") || "ru";
 l2.value = localStorage.getItem("l2") || "en";
-
-let current = null;
-const cache = new Map();
-
-async function translate(text, lang) {
-  if (lang === "en") return text;
-  const key = lang + "|" + text;
-  if (cache.has(key)) return cache.get(key);
-  try {
-    const r = await fetch("https://api.mymemory.translated.net/get?q=" +
-      encodeURIComponent(text) + "&langpair=en|" + lang);
-    const j = await r.json();
-    const out = j.responseData.translatedText || text;
-    cache.set(key, out);
-    return out;
-  } catch (e) { return text; }
-}
-
-async function show() {
-  if (!current) return;
-  const label = current;
-  const [a, b] = await Promise.all([translate(label, l1.value), translate(label, l2.value)]);
-  if (label !== current) return; // предмет уже сменился
-  t1.textContent = a;
-  t2.textContent = b;
-}
-
 for (const sel of [l1, l2]) sel.onchange = () => {
   localStorage.setItem("l1", l1.value);
   localStorage.setItem("l2", l2.value);
-  show();
 };
+
+// Названия вне словаря переводятся онлайн (и запоминаются)
+const online = new Map(), pending = new Set();
+function label(cls, lang) {
+  if (lang === "en") return cls;
+  if (DICT[cls] && DICT[cls][lang]) return DICT[cls][lang];
+  const key = lang + "|" + cls;
+  if (online.has(key)) return online.get(key);
+  if (!pending.has(key)) {
+    pending.add(key);
+    fetch("https://api.mymemory.translated.net/get?q=" + encodeURIComponent(cls) + "&langpair=en|" + lang)
+      .then(r => r.json()).then(j => online.set(key, j.responseData.translatedText || cls))
+      .catch(() => online.set(key, cls));
+  }
+  return cls;
+}
+
+const canvas = $("ov"), ctx = canvas.getContext("2d");
+function resize() {
+  const d = window.devicePixelRatio || 1;
+  canvas.width = innerWidth * d; canvas.height = innerHeight * d;
+  ctx.setTransform(d, 0, 0, d, 0, 0);
+}
+addEventListener("resize", resize); resize();
+
+function draw(preds) {
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const scale = Math.max(innerWidth / vw, innerHeight / vh);
+  const offX = (vw * scale - innerWidth) / 2, offY = (vh * scale - innerHeight) / 2;
+  ctx.font = "bold 18px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+  for (const p of preds) {
+    const x = p.bbox[0] * scale - offX, y = p.bbox[1] * scale - offY;
+    const w = p.bbox[2] * scale, h = p.bbox[3] * scale;
+    ctx.strokeStyle = "#ffd54f"; ctx.lineWidth = 3;
+    ctx.strokeRect(x, y, w, h);
+
+    const a = label(p.class, l1.value), b = label(p.class, l2.value);
+    const lines = a === b ? [a] : [a, b];
+    const tw = Math.max(...lines.map(t => ctx.measureText(t).width)) + 14;
+    const th = lines.length * 24 + 6;
+    const ty = y - th >= 0 ? y - th : y;
+    const tx = Math.min(Math.max(0, x), innerWidth - tw);
+    ctx.fillStyle = "rgba(0,0,0,.75)"; ctx.fillRect(tx, ty, tw, th);
+    lines.forEach((t, i) => {
+      ctx.fillStyle = i ? "#ffd54f" : "#fff";
+      ctx.fillText(t, tx + 7, ty + 15 + i * 24);
+    });
+  }
+}
 
 async function main() {
   try {
@@ -86,46 +178,12 @@ async function main() {
     statusEl.textContent = "Нет доступа к камере (нужен https и разрешение)";
     return;
   }
-  const model = await mobilenet.load({ version: 2, alpha: 1.0 });
-  statusEl.textContent = "Нажмите на предмет на экране";
-
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 224;
-  const ctx = canvas.getContext("2d");
-  const mark = $("mark");
-  let busy = false;
-
-  video.addEventListener("click", async (e) => {
-    if (busy || !video.videoWidth) return;
-    busy = true;
-    const vw = video.videoWidth, vh = video.videoHeight;
-    const cw = window.innerWidth, ch = window.innerHeight;
-    // экран показывает видео с object-fit: cover — пересчитываем точку нажатия
-    const scale = Math.max(cw / vw, ch / vh);
-    const offX = (vw * scale - cw) / 2, offY = (vh * scale - ch) / 2;
-    const vx = (e.clientX + offX) / scale, vy = (e.clientY + offY) / scale;
-    const size = Math.min(vw, vh) * 0.4;
-    const sx = Math.max(0, Math.min(vw - size, vx - size / 2));
-    const sy = Math.max(0, Math.min(vh - size, vy - size / 2));
-    ctx.drawImage(video, sx, sy, size, size, 0, 0, 224, 224);
-
-    // рамка на месте нажатия
-    const px = size * scale;
-    Object.assign(mark.style, { left: e.clientX + "px", top: e.clientY + "px",
-      width: px + "px", height: px + "px", opacity: 1 });
-    setTimeout(() => mark.style.opacity = 0, 700);
-
-    statusEl.textContent = "Распознаю…";
-    const res = await model.classify(canvas, 1);
-    if (res.length && res[0].probability > 0.15) {
-      current = res[0].className.split(",")[0].trim().toLowerCase();
-      statusEl.textContent = "Нажмите на другой предмет";
-      show();
-    } else {
-      statusEl.textContent = "Не удалось распознать, нажмите ещё раз ближе к предмету";
-    }
-    busy = false;
-  });
+  const model = await cocoSsd.load({ base: "lite_mobilenet_v2" });
+  statusEl.textContent = "Наведите камеру на предметы";
+  (async function loop() {
+    if (video.readyState >= 2) draw(await model.detect(video, 10, 0.5));
+    requestAnimationFrame(loop);
+  })();
 }
 main();
 </script>
